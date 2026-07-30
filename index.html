@@ -2,222 +2,263 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <!-- スマホ表示用設定（拡大縮小禁止・アプリっぽく見せる設定） -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>SF利用履歴</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple 3D FPS Game</title>
   <style>
-    :root {
-      --suica-green: #008000;
-      --bg-gray: #f4f4f4;
-      --border-color: #e0e0e0;
-      --text-dark: #333333;
-      --text-gray: #666666;
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      user-select: none; /* テキスト選択不可にしてアプリ感を入れる */
-      -webkit-user-select: none;
-      -webkit-touch-callout: none;
-      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
-    }
-
     body {
-      background-color: var(--bg-gray);
-      color: var(--text-dark);
-      padding-top: env(safe-area-inset-top);
-      padding-bottom: env(safe-area-inset-bottom);
+      margin: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+      user-select: none;
     }
-
-    /* ヘッダーエリア */
-    .header {
-      position: sticky;
-      top: 0;
-      background-color: var(--suica-green);
+    /* 照準（クロスヘア） */
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 10px;
+      height: 10px;
       color: white;
-      height: 50px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 16px;
-      z-index: 100;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
-    }
-
-    .header-title {
-      font-size: 16px;
-      font-weight: bold;
-      letter-spacing: 0.5px;
-    }
-
-    .close-btn {
-      font-size: 14px;
-      color: white;
-      opacity: 0.9;
-    }
-
-    /* カード情報エリア */
-    .card-info {
-      background-color: white;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border-color);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .balance-label {
-      font-size: 12px;
-      color: var(--text-gray);
-    }
-
-    .balance-amount {
+      transform: translate(-50%, -50%);
+      pointer-events: none;
       font-size: 20px;
-      font-weight: bold;
-      color: var(--text-dark);
+      line-height: 10px;
+      text-align: center;
     }
-
-    /* 履歴リスト */
-    .history-list {
-      background-color: white;
-      margin-top: 10px;
-      border-top: 1px solid var(--border-color);
+    /* UIオーバーレイ */
+    #ui {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: white;
+      font-size: 20px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+      pointer-events: none;
     }
-
-    .history-item {
+    /* スタート画面指示 */
+    #instructions {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
       display: flex;
-      justify-content: space-between;
-      padding: 12px 16px;
-      border-bottom: 1px solid var(--border-color);
+      flex-direction: column;
+      justify-content: center;
       align-items: center;
-    }
-
-    .item-left {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .item-date {
-      font-size: 12px;
-      color: var(--text-gray);
-    }
-
-    .item-detail {
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--text-dark);
-    }
-
-    .item-right {
-      text-align: right;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .item-amount {
-      font-size: 15px;
-      font-weight: bold;
-    }
-
-    .amount-minus {
-      color: var(--text-dark);
-    }
-
-    .amount-plus {
-      color: var(--suica-green);
-    }
-
-    .item-balance {
-      font-size: 11px;
-      color: var(--text-gray);
-    }
-
-    /* パラメータ編集用の隠しコントロール（トリプルタップで表示） */
-    .admin-panel {
-      display: none;
-      padding: 15px;
-      background: #fff;
-      border: 2px solid red;
-      margin: 10px;
-      font-size: 12px;
+      cursor: pointer;
     }
   </style>
+  <!-- Three.js Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-  <!-- ヘッダー -->
-  <div class="header">
-    <div style="width: 30px;"></div>
-    <div class="header-title" id="trigger">SF利用履歴</div>
-    <div class="close-btn">閉じる</div>
-  </div>
+  <div id="crosshair">+</div>
+  <div id="ui">スコア: <span id="score">0</span></div>
 
-  <!-- 残高表示 -->
-  <div class="card-info">
-    <div>
-      <div class="balance-label">残高</div>
-      <div class="balance-amount" id="current-balance">¥2,410</div>
-    </div>
-    <div style="font-size: 12px; color: #888;">Suica (メイン)</div>
-  </div>
-
-  <!-- 履歴本体（ここを自由に書き換えます） -->
-  <div class="history-list" id="history-container">
-    <!-- 項目1: 家にいたことにしたい日のダミーデータ -->
-    <div class="history-item">
-      <div class="item-left">
-        <span class="item-date">2026/07/29 12:15</span>
-        <span class="item-detail">物販（セブン-イレブン）</span>
-      </div>
-      <div class="item-right">
-        <span class="item-amount amount-minus">-¥150</span>
-        <span class="item-balance">残高 ¥2,410</span>
-      </div>
-    </div>
-
-    <!-- 項目2: チャージ履歴 -->
-    <div class="history-item">
-      <div class="item-left">
-        <span class="item-date">2026/07/27 09:30</span>
-        <span class="item-detail">チャージ（Apple Pay）</span>
-      </div>
-      <div class="item-right">
-        <span class="item-amount amount-plus">+¥3,000</span>
-        <span class="item-balance">残高 ¥2,560</span>
-      </div>
-    </div>
-
-    <!-- 項目3: 過去の正常な移動履歴 -->
-    <div class="history-item">
-      <div class="item-left">
-        <span class="item-date">2026/07/25 18:20</span>
-        <span class="item-detail">入場 新宿 降車 渋谷</span>
-      </div>
-      <div class="item-right">
-        <span class="item-amount amount-minus">-¥170</span>
-        <span class="item-balance">残高 -¥440</span>
-      </div>
-    </div>
+  <div id="instructions">
+    <h1>クリックしてスタート</h1>
+    <p>【操作方法】</p>
+    <p>マウス: 視点移動</p>
+    <p>WASD: 移動</p>
+    <p>左クリック: 射撃</p>
+    <p>Escキー: 一時停止/カーソル解除</p>
   </div>
 
   <script>
-    // 画面の「SF利用履歴」タイトル部分を3回連続タップすると、テキスト選択ロックを一時解除できる簡易スクリプト
-    let count = 0;
-    document.getElementById('trigger').addEventListener('click', () => {
-      count++;
-      if (count >= 3) {
-        alert('編集モード：画面の文字を長押しして書き換えられます');
-        document.body.style.userSelect = 'auto';
-        document.body.style.webkitUserSelect = 'auto';
-        count = 0;
+    // --- 1. 基本セットアップ ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87ceeb); // 空色
+    scene.fog = new THREE.Fog(0x87ceeb, 0, 50);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    // ライティング
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(20, 40, 20);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // 床の作成
+    const floorGeo = new THREE.PlaneGeometry(100, 100);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x33aa33 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // --- 2. プレイヤーと視点操作 (PointerLock) ---
+    camera.position.set(0, 1.6, 0); // 人間の目線の高さ
+
+    let isLocked = false;
+    let yaw = 0;   // 左右回転
+    let pitch = 0; // 上下回転
+
+    const instructions = document.getElementById('instructions');
+
+    instructions.addEventListener('click', () => {
+      document.body.requestPointerLock();
+    });
+
+    document.addEventListener('pointerlockchange', () => {
+      if (document.pointerLockElement === document.body) {
+        isLocked = true;
+        instructions.style.display = 'none';
+      } else {
+        isLocked = false;
+        instructions.style.display = 'flex';
       }
     });
+
+    document.addEventListener('mousemove', (event) => {
+      if (!isLocked) return;
+      const mouseSensitivity = 0.002;
+      yaw -= event.movementX * mouseSensitivity;
+      pitch -= event.movementY * mouseSensitivity;
+
+      // 上下の回転角度を制限（真上・真下を行き過ぎないように）
+      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+
+      // カメラの回転を反映
+      const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+      euler.x = pitch;
+      euler.y = yaw;
+      camera.quaternion.setFromEuler(euler);
+    });
+
+    // --- 3. キーボードによる移動処理 ---
+    const keys = {};
+    document.addEventListener('keydown', (e) => keys[e.code] = true);
+    document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+    const speed = 0.15;
+    function updateMovement() {
+      if (!isLocked) return;
+
+      const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+      if (keys['KeyW']) camera.position.addScaledVector(forward, speed);
+      if (keys['KeyS']) camera.position.addScaledVector(forward, -speed);
+      if (keys['KeyA']) camera.position.addScaledVector(side, -speed);
+      if (keys['KeyD']) camera.position.addScaledVector(side, speed);
+
+      // 簡単なマップ境界制限
+      camera.position.x = Math.max(-45, Math.min(45, camera.position.x));
+      camera.position.z = Math.max(-45, Math.min(45, camera.position.z));
+      camera.position.y = 1.6; // 高さを固定
+    }
+
+    // --- 4. ターゲット（標的）とスコアの管理 ---
+    const targets = [];
+    let score = 0;
+    const scoreEl = document.getElementById('score');
+
+    function createTarget() {
+      const geo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+      const mat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
+      const target = new THREE.Mesh(geo, mat);
+
+      target.position.x = (Math.random() - 0.5) * 60;
+      target.position.y = 1 + Math.random() * 2;
+      target.position.z = (Math.random() - 0.5) * 60;
+      target.castShadow = true;
+
+      scene.add(target);
+      targets.push(target);
+    }
+
+    // 初期ターゲット生成
+    for (let i = 0; i < 8; i++) {
+      createTarget();
+    }
+
+    // --- 5. 弾の発射とヒット判定 ---
+    const bullets = [];
+
+    document.addEventListener('mousedown', (e) => {
+      if (!isLocked || e.button !== 0) return; // 左クリックのみ
+
+      // 弾オブジェクトの作成
+      const bulletGeo = new THREE.SphereGeometry(0.1, 8, 8);
+      const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+
+      bullet.position.copy(camera.position);
+
+      // 発射方向（カメラの向いている方向）
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+      bullet.userData = { direction: dir, life: 0 };
+
+      scene.add(bullet);
+      bullets.push(bullet);
+    });
+
+    function updateBullets() {
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const b = bullets[i];
+        b.position.addScaledVector(b.userData.direction, 0.8); // 弾の移動スピード
+        b.userData.life++;
+
+        // ターゲットとのヒット判定
+        for (let j = targets.length - 1; j >= 0; j--) {
+          const t = targets[j];
+          if (b.position.distanceTo(t.position) < 1.0) {
+            // ヒット時処理
+            scene.remove(t);
+            targets.splice(j, 1);
+
+            scene.remove(b);
+            bullets.splice(i, 1);
+
+            score += 10;
+            scoreEl.textContent = score;
+
+            // 新しいターゲットを生成
+            createTarget();
+            break;
+          }
+        }
+
+        // 一定距離進んだら弾を削除
+        if (b.userData.life > 100) {
+          scene.remove(b);
+          bullets.splice(i, 1);
+        }
+      }
+    }
+
+    // --- 6. メインループと画面リサイズ対応 ---
+    function animate() {
+      requestAnimationFrame(animate);
+
+      updateMovement();
+      updateBullets();
+
+      // ターゲットを少し回転させる演出
+      targets.forEach(t => t.rotation.y += 0.01);
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
   </script>
 </body>
 </html>
