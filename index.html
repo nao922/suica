@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <!-- PWA/WebApp化で全画面（URLバー非表示）にするためのメタタグ -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  
+  <title>Frog Dash - 横スクロールアドベンチャー</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none; /* スマホのスクロールやズームを完全に防止 */
+    }
+    #game-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #111;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      max-width: 600px; /* PC閲覧時のアスペクト比維持用 */
+      background: #388e3c; /* 沼地・草原風の背景色 */
+      display: block;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="game-container">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- 画面サイズの設定 ---
+    function resizeCanvas() {
+      const container = document.getElementById('game-container');
+      canvas.width = container.clientWidth > 600 ? 600 : container.clientWidth;
+      canvas.height = container.clientHeight;
+    }
+    resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- 全画面化（URLバーを消すためのタップ処理） ---
+    function requestFullScreen() {
+      const doc = window.document;
+      const docEl = doc.documentElement;
+      const requestNative = docEl.requestFullscreen || docEl.webkitRequestFullScreen || docEl.mozRequestFullScreen || docEl.msRequestFullscreen;
+      if (requestNative && !doc.fullscreenElement && !doc.webkitFullscreenElement) {
+        requestNative.call(docEl).catch(() => {});
+      }
+    }
+
+    // --- ゲーム状態変数 ---
+    let gameState = 'START'; // 'START', 'PLAYING', 'GAMEOVER'
+    let score = 0;
+    let distance = 0;
+    let highScore = localStorage.getItem('frog_highscore') || 0;
+    let invincibleFrame = 0; // 被弾後の無敵時間
+
+    // --- カエル（プレイヤー） ---
+    const frog = {
+      x: 80,
+      y: 200,
+      radius: 16,
+      gravity: 0.38,
+      jump: -6.8,
+      velocity: 0,
+      hp: 3,
+      maxHp: 3,
+
+      draw() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        // 無敵時間中の点滅処理
+        if (invincibleFrame > 0 && Math.floor(invincibleFrame / 4) % 2 === 0) {
+          ctx.globalAlpha = 0.4;
+        }
+
+        // 移動速度に応じた回転演出
+        let angle = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, this.velocity * 0.08));
+        ctx.rotate(angle);
+
+        // 体（緑の丸）
+        ctx.fillStyle = '#4caf50';
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#1b5e20';
+        ctx.stroke();
+
+        // 目の上の出っ張り（左目・右目）
+        ctx.fillStyle = '#81c784';
+        ctx.beginPath();
+        ctx.arc(-5, -12, 6, 0, Math.PI * 2);
+        ctx.arc(5, -12, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // 黒目
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(-4, -13, 2.5, 0, Math.PI * 2);
+        ctx.arc(6, -13, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 口
+        ctx.strokeStyle = '#1b5e20';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, 2, 8, 0.2, Math.PI - 0.2);
+        ctx.stroke();
+
+        ctx.restore();
+      },
+
+      update() {
+        this.velocity += this.gravity;
+        this.y += this.velocity;
+
+        // 地面と天井の判定
+        if (this.y + this.radius >= canvas.height - 30) {
+          this.y = canvas.height - 30 - this.radius;
+          this.velocity = 0;
+        }
+        if (this.y - this.radius <= 0) {
+          this.y = this.radius;
+          this.velocity = 0;
+        }
+      },
+
+      jumpAction() {
+        this.velocity = this.jump;
+      },
+
+      reset() {
+        this.y = canvas.height / 2;
+        this.velocity = 0;
+        this.hp = this.maxHp;
+      }
+    };
+
+    // --- 障害物（岩）とアイテム（水草） ---
+    const obstacles = [];
+    const items = [];
+    let spawnTimer = 0;
+
+    function spawnElements() {
+      spawnTimer++;
+      // 100フレームごとに障害物（岩の壁）を生成
+      if (spawnTimer % 100 === 0) {
+        // 確率で「コントロールが難しい狭い道（高難易度ゾーン）」を発生させる
+        const isNarrow = Math.random() < 0.35; 
+        const gapSize = isNarrow ? 90 : 140; // 狭い道は隙間90px
+
+        const minHeight = 40;
+        const maxHeight = canvas.height - 30 - gapSize - minHeight;
+        const topHeight = Math.floor(Math.random() * (maxHeight - minHeight + 1)) + minHeight;
+
+        // 上下の岩を追加
+        obstacles.push({
+          x: canvas.width,
+          top: topHeight,
+          bottom: canvas.height - 30 - (topHeight + gapSize),
+          width: 48,
+          passed: false
+        });
+
+        // 「狭い道ゾーン」には回復用の水草を生成する
+        if (isNarrow) {
+          items.push({
+            x: canvas.width + 24, // 岩の間の中央付近
+            y: topHeight + gapSize / 2,
+            radius: 12,
+            collected: false
+          });
+        }
+      }
+    }
+
+    function updateObstaclesAndItems() {
+      const scrollSpeed = 2.5;
+
+      // 岩の更新
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+        obs.x -= scrollSpeed;
+
+        // 当たり判定（岩）
+        if (invincibleFrame === 0) {
+          if (
+            frog.x + frog.radius > obs.x &&
+            frog.x - frog.radius < obs.x + obs.width &&
+            (frog.y - frog.radius < obs.top || frog.y + frog.radius > canvas.height - 30 - obs.bottom)
+          ) {
+            frog.hp--;
+            invincibleFrame = 60; // 60フレーム（約1秒間）無敵
+            if (frog.hp <= 0) {
+              gameOver();
+            }
+          }
+        }
+
+        // スコア加算（通過時）
+        if (!obs.passed && obs.x + obs.width < frog.x) {
+          obs.passed = true;
+          score += 10;
+        }
+
+        // 画面外削除
+        if (obs.x + obs.width < 0) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      // 水草（回復アイテム）の更新
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i];
+        item.x -= scrollSpeed;
+
+        // 当たり判定（水草ゲット）
+        const dist = Math.hypot(frog.x - item.x, frog.y - item.y);
+        if (!item.collected && dist < frog.radius + item.radius) {
+          item.collected = true;
+          if (frog.hp < frog.maxHp) {
+            frog.hp++; // 体力1回復
+          }
+          score += 20; // ボーナススコア
+        }
+
+        if (item.x + item.radius < 0 || item.collected) {
+          items.splice(i, 1);
+        }
+      }
+    }
+
+    // --- 描画処理 ---
+    function drawRock(x, y, w, h) {
+      // 岩のグラデーション描画
+      ctx.fillStyle = '#616161';
+      ctx.strokeStyle = '#212121';
+      ctx.lineWidth = 3;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeRect(x, y, w, h);
+
+      // ゴツゴツ感を出す簡単な模様
+      ctx.fillStyle = '#424242';
+      ctx.fillRect(x + 6, y + 10, w - 12, 8);
+    }
+
+    function drawObstacles() {
+      obstacles.forEach(obs => {
+        // 上の岩
+        drawRock(obs.x, 0, obs.width, obs.top);
+        // 下の岩
+        drawRock(obs.x, canvas.height - 30 - obs.bottom, obs.width, obs.bottom);
+      });
+    }
+
+    function drawItems() {
+      items.forEach(item => {
+        // 水草の描画
+        ctx.fillStyle = '#00e676';
+        ctx.beginPath();
+        ctx.arc(item.x, item.y, item.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#1b5e20';
+        ctx.stroke();
+
+        // 葉っぱの筋
+        ctx.fillStyle = '#b9f6ca';
+        ctx.beginPath();
+        ctx.arc(item.x - 3, item.y - 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawBackground() {
+      // 川・沼地の背景（流れるライン）
+      ctx.fillStyle = '#2e7d32';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 水流の表現
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.lineWidth = 2;
+      let offset = (distance * 2) % 40;
+      for (let y = 20; y < canvas.height - 30; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(-offset, y);
+        ctx.lineTo(canvas.width + 40 - offset, y);
+        ctx.stroke();
+      }
+
+      // 川底（地面）
+      ctx.fillStyle = '#3e2723';
+      ctx.fillRect(0, canvas.height - 30, canvas.width, 30);
+      ctx.fillStyle = '#5d4037';
+      ctx.fillRect(0, canvas.height - 30, canvas.width, 6);
+    }
+
+    function drawUI() {
+      // 1. 体力（ハートマーク）
+      ctx.font = '20px sans-serif';
+      let hearts = '';
+      for (let i = 0; i < frog.maxHp; i++) {
+        hearts += (i < frog.hp) ? '❤️' : '🖤';
+      }
+      ctx.fillText(`HP: ${hearts}`, 15, 35);
+
+      // 2. スコア
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(`SCORE: ${score}`, canvas.width - 15, 35);
+
+      // スタート / ゲームオーバー画面
+      ctx.textAlign = 'center';
+      if (gameState === 'START') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#a5d6a7';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText('🐸 カエルジャンプ 🐸', canvas.width / 2, canvas.height / 2 - 50);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px sans-serif';
+        ctx.fillText('画面タップで跳ぶ！', canvas.width / 2, canvas.height / 2);
+        ctx.fillText('狭い道にある【水草】で体力回復！', canvas.width / 2, canvas.height / 2 + 35);
+        ctx.fillText('タップしてスタート', canvas.width / 2, canvas.height / 2 + 85);
+      } else if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#ff5252';
+        ctx.font = 'bold 30px sans-serif';
+        ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 60);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '20px sans-serif';
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 - 10);
+        ctx.fillText(`High Score: ${highScore}`, canvas.width / 2, canvas.height / 2 + 25);
+
+        ctx.font = '16px sans-serif';
+        ctx.fillStyle = '#a5d6a7';
+        ctx.fillText('タップしてリトライ', canvas.width / 2, canvas.height / 2 + 80);
+      }
+    }
+
+    // --- アクション処理（タップ・クリック） ---
+    function handleAction(e) {
+      if (e) e.preventDefault();
+      requestFullScreen(); // 全画面化・URLバー消去の試み
+
+      if (gameState === 'START') {
+        gameState = 'PLAYING';
+        frog.jumpAction();
+      } else if (gameState === 'PLAYING') {
+        frog.jumpAction();
+      } else if (gameState === 'GAMEOVER') {
+        resetGame();
+      }
+    }
+
+    window.addEventListener('touchstart', handleAction, { passive: false });
+    window.addEventListener('mousedown', handleAction);
+
+    // --- ゲームオーバー・リセット ---
+    function gameOver() {
+      gameState = 'GAMEOVER';
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('frog_highscore', highScore);
+      }
+    }
+
+    function resetGame() {
+      score = 0;
+      distance = 0;
+      spawnTimer = 0;
+      invincibleFrame = 0;
+      obstacles.length = 0;
+      items.length = 0;
+      frog.reset();
+      gameState = 'START';
+    }
+
+    // --- メインループ ---
+    function loop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      drawBackground();
+
+      if (gameState === 'PLAYING') {
+        distance++;
+        if (invincibleFrame > 0) invincibleFrame--;
+
+        frog.update();
+        spawnElements();
+        updateObstaclesAndItems();
+      }
+
+      drawObstacles();
+      drawItems();
+      frog.draw();
+      drawUI();
+
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
