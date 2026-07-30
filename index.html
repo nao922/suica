@@ -2,16 +2,17 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Simple 3D FPS Game</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Mobile 3D FPS Game</title>
   <style>
     body {
       margin: 0;
       overflow: hidden;
       font-family: sans-serif;
       user-select: none;
+      -webkit-user-select: none;
+      touch-action: none; /* スマホのスクロール等を無効化 */
     }
-    /* 照準（クロスヘア） */
     #crosshair {
       position: absolute;
       top: 50%;
@@ -21,37 +22,62 @@
       color: white;
       transform: translate(-50%, -50%);
       pointer-events: none;
-      font-size: 20px;
+      font-size: 24px;
       line-height: 10px;
       text-align: center;
     }
-    /* UIオーバーレイ */
     #ui {
       position: absolute;
-      top: 20px;
-      left: 20px;
+      top: 15px;
+      left: 15px;
       color: white;
-      font-size: 20px;
+      font-size: 18px;
       text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
       pointer-events: none;
     }
-    /* スタート画面指示 */
-    #instructions {
+    /* スマホ操作ガイドエリア */
+    #touch-zones {
       position: absolute;
       top: 0;
       left: 0;
       width: 100%;
       height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      color: white;
       display: flex;
-      flex-direction: column;
+      pointer-events: none;
+    }
+    .zone-hint {
+      flex: 1;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: flex-end;
+      padding-bottom: 30px;
+      color: rgba(255, 255, 255, 0.4);
+      font-size: 14px;
+    }
+    /* 射撃ボタン */
+    #shoot-btn {
+      position: absolute;
+      bottom: 40px;
+      right: 30px;
+      width: 75px;
+      height: 75px;
+      background: rgba(255, 50, 50, 0.7);
+      border: 3px solid white;
+      border-radius: 50%;
+      color: white;
+      font-weight: bold;
+      font-size: 16px;
+      display: flex;
       justify-content: center;
       align-items: center;
-      cursor: pointer;
+      touch-action: manipulation;
+    }
+    #shoot-btn:active {
+      background: rgba(255, 0, 0, 0.9);
+      transform: scale(0.95);
     }
   </style>
-  <!-- Three.js Library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
@@ -59,19 +85,17 @@
   <div id="crosshair">+</div>
   <div id="ui">スコア: <span id="score">0</span></div>
 
-  <div id="instructions">
-    <h1>クリックしてスタート</h1>
-    <p>【操作方法】</p>
-    <p>マウス: 視点移動</p>
-    <p>WASD: 移動</p>
-    <p>左クリック: 射撃</p>
-    <p>Escキー: 一時停止/カーソル解除</p>
+  <div id="touch-zones">
+    <div class="zone-hint">【左半分】移動</div>
+    <div class="zone-hint">【右半分】視点</div>
   </div>
+
+  <div id="shoot-btn">FIRE</div>
 
   <script>
     // --- 1. 基本セットアップ ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb); // 空色
+    scene.background = new THREE.Color(0x87ceeb);
     scene.fog = new THREE.Fog(0x87ceeb, 0, 50);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -80,8 +104,7 @@
     renderer.shadowMap.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    // ライティング
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     scene.add(ambientLight);
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -89,7 +112,6 @@
     dirLight.castShadow = true;
     scene.add(dirLight);
 
-    // 床の作成
     const floorGeo = new THREE.PlaneGeometry(100, 100);
     const floorMat = new THREE.MeshStandardMaterial({ color: 0x33aa33 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -97,69 +119,112 @@
     floor.receiveShadow = true;
     scene.add(floor);
 
-    // --- 2. プレイヤーと視点操作 (PointerLock) ---
-    camera.position.set(0, 1.6, 0); // 人間の目線の高さ
+    camera.position.set(0, 1.6, 0);
 
-    let isLocked = false;
-    let yaw = 0;   // 左右回転
-    let pitch = 0; // 上下回転
+    // --- 2. スマホタッチ操作の処理 ---
+    let yaw = 0;
+    let pitch = 0;
+    
+    let moveTouchId = null;
+    let moveStartPos = { x: 0, y: 0 };
+    let moveDir = { x: 0, y: 0 }; // 移動方向ベクトル
 
-    const instructions = document.getElementById('instructions');
+    let lookTouchId = null;
+    let lookLastPos = { x: 0, y: 0 };
 
-    instructions.addEventListener('click', () => {
-      document.body.requestPointerLock();
-    });
+    const shootBtn = document.getElementById('shoot-btn');
 
-    document.addEventListener('pointerlockchange', () => {
-      if (document.pointerLockElement === document.body) {
-        isLocked = true;
-        instructions.style.display = 'none';
-      } else {
-        isLocked = false;
-        instructions.style.display = 'flex';
+    // タッチ開始
+    window.addEventListener('touchstart', (e) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        // 射撃ボタン自体のタップは移動/視点処理から除外
+        if (e.target === shootBtn) continue;
+
+        const isLeftScreen = touch.clientX < window.innerWidth / 2;
+
+        if (isLeftScreen && moveTouchId === null) {
+          moveTouchId = touch.identifier;
+          moveStartPos = { x: touch.clientX, y: touch.clientY };
+        } else if (!isLeftScreen && lookTouchId === null) {
+          lookTouchId = touch.identifier;
+          lookLastPos = { x: touch.clientX, y: touch.clientY };
+        }
+      }
+    }, { passive: false });
+
+    // タッチ移動
+    window.addEventListener('touchmove', (e) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        // 左画面（移動）
+        if (touch.identifier === moveTouchId) {
+          const dx = touch.clientX - moveStartPos.x;
+          const dy = touch.clientY - moveStartPos.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          const maxDist = 50; // スワイプ感度の上限
+
+          if (dist > 0) {
+            moveDir.x = (dx / Math.min(dist, maxDist));
+            moveDir.y = (dy / Math.min(dist, maxDist));
+          }
+        }
+
+        // 右画面（視点操作）
+        if (touch.identifier === lookTouchId) {
+          const dx = touch.clientX - lookLastPos.x;
+          const dy = touch.clientY - lookLastPos.y;
+
+          const sensitivity = 0.005;
+          yaw -= dx * sensitivity;
+          pitch -= dy * sensitivity;
+          pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+
+          lookLastPos = { x: touch.clientX, y: touch.clientY };
+        }
+      }
+    }, { passive: false });
+
+    // タッチ終了
+    window.addEventListener('touchend', (e) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (touch.identifier === moveTouchId) {
+          moveTouchId = null;
+          moveDir = { x: 0, y: 0 };
+        }
+        if (touch.identifier === lookTouchId) {
+          lookTouchId = null;
+        }
       }
     });
 
-    document.addEventListener('mousemove', (event) => {
-      if (!isLocked) return;
-      const mouseSensitivity = 0.002;
-      yaw -= event.movementX * mouseSensitivity;
-      pitch -= event.movementY * mouseSensitivity;
-
-      // 上下の回転角度を制限（真上・真下を行き過ぎないように）
-      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
-
-      // カメラの回転を反映
+    // --- 3. 移動と回転の更新 ---
+    const speed = 0.12;
+    function updateMovement() {
+      // カメラ回転の反映
       const euler = new THREE.Euler(0, 0, 0, 'YXZ');
       euler.x = pitch;
       euler.y = yaw;
       camera.quaternion.setFromEuler(euler);
-    });
 
-    // --- 3. キーボードによる移動処理 ---
-    const keys = {};
-    document.addEventListener('keydown', (e) => keys[e.code] = true);
-    document.addEventListener('keyup', (e) => keys[e.code] = false);
+      // タッチによる移動の反映
+      if (moveDir.x !== 0 || moveDir.y !== 0) {
+        const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
 
-    const speed = 0.15;
-    function updateMovement() {
-      if (!isLocked) return;
+        camera.position.addScaledVector(forward, -moveDir.y * speed);
+        camera.position.addScaledVector(side, moveDir.x * speed);
+      }
 
-      const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-      const side = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-
-      if (keys['KeyW']) camera.position.addScaledVector(forward, speed);
-      if (keys['KeyS']) camera.position.addScaledVector(forward, -speed);
-      if (keys['KeyA']) camera.position.addScaledVector(side, -speed);
-      if (keys['KeyD']) camera.position.addScaledVector(side, speed);
-
-      // 簡単なマップ境界制限
       camera.position.x = Math.max(-45, Math.min(45, camera.position.x));
       camera.position.z = Math.max(-45, Math.min(45, camera.position.z));
-      camera.position.y = 1.6; // 高さを固定
+      camera.position.y = 1.6;
     }
 
-    // --- 4. ターゲット（標的）とスコアの管理 ---
+    // --- 4. ターゲット & 弾の処理 ---
     const targets = [];
     let score = 0;
     const scoreEl = document.getElementById('score');
@@ -169,84 +234,75 @@
       const mat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
       const target = new THREE.Mesh(geo, mat);
 
-      target.position.x = (Math.random() - 0.5) * 60;
+      target.position.x = (Math.random() - 0.5) * 50;
       target.position.y = 1 + Math.random() * 2;
-      target.position.z = (Math.random() - 0.5) * 60;
+      target.position.z = (Math.random() - 0.5) * 50;
       target.castShadow = true;
 
       scene.add(target);
       targets.push(target);
     }
 
-    // 初期ターゲット生成
-    for (let i = 0; i < 8; i++) {
-      createTarget();
-    }
+    for (let i = 0; i < 8; i++) createTarget();
 
-    // --- 5. 弾の発射とヒット判定 ---
     const bullets = [];
-
-    document.addEventListener('mousedown', (e) => {
-      if (!isLocked || e.button !== 0) return; // 左クリックのみ
-
-      // 弾オブジェクトの作成
-      const bulletGeo = new THREE.SphereGeometry(0.1, 8, 8);
+    function shootBullet() {
+      const bulletGeo = new THREE.SphereGeometry(0.15, 8, 8);
       const bulletMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
       const bullet = new THREE.Mesh(bulletGeo, bulletMat);
 
       bullet.position.copy(camera.position);
 
-      // 発射方向（カメラの向いている方向）
       const dir = new THREE.Vector3();
       camera.getWorldDirection(dir);
       bullet.userData = { direction: dir, life: 0 };
 
       scene.add(bullet);
       bullets.push(bullet);
+    }
+
+    // 射撃ボタンのタップイベント
+    shootBtn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      shootBullet();
     });
 
     function updateBullets() {
       for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i];
-        b.position.addScaledVector(b.userData.direction, 0.8); // 弾の移動スピード
+        b.position.addScaledVector(b.userData.direction, 0.8);
         b.userData.life++;
 
-        // ターゲットとのヒット判定
         for (let j = targets.length - 1; j >= 0; j--) {
           const t = targets[j];
-          if (b.position.distanceTo(t.position) < 1.0) {
-            // ヒット時処理
+          if (b.position.distanceTo(t.position) < 1.2) {
             scene.remove(t);
             targets.splice(j, 1);
-
             scene.remove(b);
             bullets.splice(i, 1);
 
             score += 10;
             scoreEl.textContent = score;
 
-            // 新しいターゲットを生成
             createTarget();
             break;
           }
         }
 
-        // 一定距離進んだら弾を削除
-        if (b.userData.life > 100) {
+        if (b.userData.life > 80) {
           scene.remove(b);
           bullets.splice(i, 1);
         }
       }
     }
 
-    // --- 6. メインループと画面リサイズ対応 ---
+    // --- 5. アニメーションループ ---
     function animate() {
       requestAnimationFrame(animate);
 
       updateMovement();
       updateBullets();
 
-      // ターゲットを少し回転させる演出
       targets.forEach(t => t.rotation.y += 0.01);
 
       renderer.render(scene, camera);
